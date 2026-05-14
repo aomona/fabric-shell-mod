@@ -7,7 +7,6 @@ import net.minecraft.util.Formatting;
 
 public class AnsiColorParser {
     private final AnsiStyle style = new AnsiStyle();
-    private int lineNumber;
 
     public static Text parse(String line) {
         return new AnsiColorParser().parseLine(line);
@@ -17,7 +16,6 @@ public class AnsiColorParser {
         MutableText result = Text.literal("");
         StringBuilder plain = new StringBuilder();
         int column = 0;
-        int currentLine = lineNumber++;
 
         for (int i = 0; i < line.length(); i++) {
             char c = line.charAt(i);
@@ -36,13 +34,7 @@ public class AnsiColorParser {
 
                 String params = line.substring(sequenceStart, sequenceEnd);
                 char command = line.charAt(sequenceEnd);
-                if ((command == 'C' || command == 'G') && !plain.toString().isBlank() && !style.hasVisibleColor()) {
-                    style.applyAutoForeground(fallbackLogoColor(currentLine));
-                    appendPlain(result, plain, style);
-                    style.clearAutoForeground();
-                } else {
-                    appendPlain(result, plain, style);
-                }
+                appendPlain(result, plain, style);
                 column = handleCsi(result, plain, style, column, params, command);
                 i = sequenceEnd;
                 continue;
@@ -159,12 +151,9 @@ public class AnsiColorParser {
             return;
         }
 
-        String text = plain.toString();
-        if (style.isBackgroundOnly() && text.trim().isEmpty()) {
-            text = text.replace(' ', '█');
+        for (TextSegment segment : style.convertVisibleText(plain.toString())) {
+            result.append(Text.literal(segment.text()).setStyle(segment.style()));
         }
-
-        result.append(Text.literal(text).setStyle(style.toTextStyle()));
         plain.setLength(0);
     }
 
@@ -318,18 +307,12 @@ public class AnsiColorParser {
         return Math.max(0, Math.min(255, value));
     }
 
-    private static int fallbackLogoColor(int line) {
-        int[] ubuntuLike = {
-                0xE95420, 0xE95420, 0xC34113, 0xF29879,
-                0xE95420, 0x77216F, 0xE95420, 0xF29879
-        };
-        return ubuntuLike[Math.floorMod(line, ubuntuLike.length)];
+    private record TextSegment(String text, Style style) {
     }
 
     private static class AnsiStyle {
         private Integer foreground;
         private Integer background;
-        private boolean autoForeground;
         private boolean bold;
         private boolean italic;
         private boolean underline;
@@ -338,47 +321,28 @@ public class AnsiColorParser {
         private void reset() {
             foreground = null;
             background = null;
-            autoForeground = false;
             bold = false;
             italic = false;
             underline = false;
             strikethrough = false;
         }
 
-        private boolean isBackgroundOnly() {
-            return foreground == null && background != null;
-        }
-
-        private boolean hasVisibleColor() {
-            return foreground != null || background != null;
-        }
-
         private void setForeground(Integer color) {
             foreground = color;
-            autoForeground = false;
         }
 
         private void setBackground(Integer color) {
             background = color;
         }
 
-        private void applyAutoForeground(int color) {
-            foreground = color;
-            autoForeground = true;
-        }
-
-        private void clearAutoForeground() {
-            if (autoForeground) {
-                foreground = null;
-                autoForeground = false;
-            }
-        }
-
         private Style toTextStyle() {
+            return toTextStyle(foreground != null ? foreground : background);
+        }
+
+        private Style toTextStyle(Integer color) {
             Style style = Style.EMPTY;
-            Integer visibleColor = foreground != null ? foreground : background;
-            if (visibleColor != null) {
-                style = style.withColor(visibleColor);
+            if (color != null) {
+                style = style.withColor(color);
             }
             if (bold) {
                 style = style.withBold(true);
@@ -393,6 +357,40 @@ public class AnsiColorParser {
                 style = style.withStrikethrough(true);
             }
             return style;
+        }
+
+        private TextSegment[] convertVisibleText(String text) {
+            if (background == null) {
+                return new TextSegment[]{new TextSegment(text, toTextStyle())};
+            }
+
+            TextSegment[] segments = new TextSegment[text.length()];
+            int count = 0;
+            StringBuilder current = new StringBuilder();
+            Boolean currentWasSpace = null;
+            Integer currentColor = null;
+
+            for (int i = 0; i < text.length(); i++) {
+                char c = text.charAt(i);
+                boolean isSpace = c == ' ';
+                Integer color = isSpace || foreground == null ? background : foreground;
+                if (currentWasSpace != null && currentWasSpace != isSpace) {
+                    segments[count++] = new TextSegment(current.toString(), toTextStyle(currentColor));
+                    current.setLength(0);
+                }
+
+                currentWasSpace = isSpace;
+                currentColor = color;
+                current.append(isSpace ? '█' : c);
+            }
+
+            if (!current.isEmpty()) {
+                segments[count++] = new TextSegment(current.toString(), toTextStyle(currentColor));
+            }
+
+            TextSegment[] result = new TextSegment[count];
+            System.arraycopy(segments, 0, result, 0, count);
+            return result;
         }
     }
 }
