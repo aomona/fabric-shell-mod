@@ -6,10 +6,15 @@ import net.minecraft.text.Text;
 import net.minecraft.util.Formatting;
 
 public class AnsiColorParser {
+    private final AnsiStyle style = new AnsiStyle();
+
     public static Text parse(String line) {
+        return new AnsiColorParser().parseLine(line);
+    }
+
+    public Text parseLine(String line) {
         MutableText result = Text.literal("");
         StringBuilder plain = new StringBuilder();
-        AnsiStyle style = new AnsiStyle();
         int column = 0;
 
         for (int i = 0; i < line.length(); i++) {

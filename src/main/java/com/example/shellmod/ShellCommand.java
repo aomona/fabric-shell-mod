@@ -28,13 +28,15 @@ public class ShellCommand {
 
             try {
                 Process process = pb.start();
+                AnsiColorParser ansiParser = new AnsiColorParser();
 
                 try (BufferedReader reader = new BufferedReader(
                         new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
                     String line;
                     while ((line = reader.readLine()) != null) {
                         final String rawLine = line;
-                        sendFeedback(source, () -> Text.literal("[Shell] ").append(AnsiColorParser.parse(rawLine)));
+                        final Text parsedLine = ansiParser.parseLine(rawLine);
+                        sendFeedback(source, () -> Text.literal("[Shell] ").append(parsedLine));
                     }
                 }
 
