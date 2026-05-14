@@ -20,14 +20,9 @@ public class AnsiColorParser {
         for (int i = 0; i < line.length(); i++) {
             char c = line.charAt(i);
 
-            if (c == '\u001B') {
-                if (i + 1 >= line.length()) {
-                    break;
-                }
-
-                char next = line.charAt(i + 1);
-                if (next == '[') {
-                    int sequenceStart = i + 2;
+            int csiPrefixLength = csiPrefixLength(line, i);
+            if (csiPrefixLength > 0) {
+                    int sequenceStart = i + csiPrefixLength;
                     int sequenceEnd = sequenceStart;
                     while (sequenceEnd < line.length() && !isCsiFinal(line.charAt(sequenceEnd))) {
                         sequenceEnd++;
@@ -43,8 +38,14 @@ public class AnsiColorParser {
                     column = handleCsi(result, plain, style, column, params, command);
                     i = sequenceEnd;
                     continue;
+            }
+
+            if (c == '\u001B') {
+                if (i + 1 >= line.length()) {
+                    break;
                 }
 
+                char next = line.charAt(i + 1);
                 if (next == ']') {
                     i = skipOsc(line, i + 2);
                     continue;
@@ -111,20 +112,34 @@ public class AnsiColorParser {
                 case 23 -> style.italic = false;
                 case 24 -> style.underline = false;
                 case 29 -> style.strikethrough = false;
-                case 30, 31, 32, 33, 34, 35, 36, 37, 90, 91, 92, 93, 94, 95, 96, 97 -> style.color = ansiBasicColor(code);
+                case 30, 31, 32, 33, 34, 35, 36, 37, 90, 91, 92, 93, 94, 95, 96, 97 -> style.foreground = ansiBasicColor(code);
+                case 40, 41, 42, 43, 44, 45, 46, 47, 100, 101, 102, 103, 104, 105, 106, 107 -> style.background = ansiBackgroundColor(code);
                 case 38 -> {
                     if (i + 1 < codes.length && codes[i + 1] == 5 && i + 2 < codes.length) {
-                        style.color = xterm256Color(codes[i + 2]);
+                        style.foreground = xterm256Color(codes[i + 2]);
                         i += 2;
                     } else if (i + 1 < codes.length && codes[i + 1] == 2 && i + 4 < codes.length) {
                         int r = clampColor(codes[i + 2]);
                         int g = clampColor(codes[i + 3]);
                         int b = clampColor(codes[i + 4]);
-                        style.color = (r << 16) | (g << 8) | b;
+                        style.foreground = (r << 16) | (g << 8) | b;
                         i += 4;
                     }
                 }
-                case 39 -> style.color = null;
+                case 48 -> {
+                    if (i + 1 < codes.length && codes[i + 1] == 5 && i + 2 < codes.length) {
+                        style.background = xterm256Color(codes[i + 2]);
+                        i += 2;
+                    } else if (i + 1 < codes.length && codes[i + 1] == 2 && i + 4 < codes.length) {
+                        int r = clampColor(codes[i + 2]);
+                        int g = clampColor(codes[i + 3]);
+                        int b = clampColor(codes[i + 4]);
+                        style.background = (r << 16) | (g << 8) | b;
+                        i += 4;
+                    }
+                }
+                case 39 -> style.foreground = null;
+                case 49 -> style.background = null;
                 default -> {
                 }
             }
@@ -136,8 +151,33 @@ public class AnsiColorParser {
             return;
         }
 
-        result.append(Text.literal(plain.toString()).setStyle(style.toTextStyle()));
+        String text = plain.toString();
+        if (style.isBackgroundOnly() && text.trim().isEmpty()) {
+            text = text.replace(' ', '█');
+        }
+
+        result.append(Text.literal(text).setStyle(style.toTextStyle()));
         plain.setLength(0);
+    }
+
+    private static int csiPrefixLength(String line, int index) {
+        if (line.charAt(index) == '\u001B' && index + 1 < line.length() && line.charAt(index + 1) == '[') {
+            return 2;
+        }
+        if (startsWith(line, index, "\\033[")) {
+            return 5;
+        }
+        if (startsWith(line, index, "\\e[")) {
+            return 3;
+        }
+        if (startsWith(line, index, "\\x1b[") || startsWith(line, index, "\\x1B[")) {
+            return 5;
+        }
+        return 0;
+    }
+
+    private static boolean startsWith(String value, int index, String prefix) {
+        return index + prefix.length() <= value.length() && value.startsWith(prefix, index);
     }
 
     private static boolean isCsiFinal(char c) {
@@ -217,6 +257,28 @@ public class AnsiColorParser {
         };
     }
 
+    private static Integer ansiBackgroundColor(int code) {
+        return switch (code) {
+            case 40 -> ansiBasicColor(30);
+            case 41 -> ansiBasicColor(31);
+            case 42 -> ansiBasicColor(32);
+            case 43 -> ansiBasicColor(33);
+            case 44 -> ansiBasicColor(34);
+            case 45 -> ansiBasicColor(35);
+            case 46 -> ansiBasicColor(36);
+            case 47 -> ansiBasicColor(37);
+            case 100 -> ansiBasicColor(90);
+            case 101 -> ansiBasicColor(91);
+            case 102 -> ansiBasicColor(92);
+            case 103 -> ansiBasicColor(93);
+            case 104 -> ansiBasicColor(94);
+            case 105 -> ansiBasicColor(95);
+            case 106 -> ansiBasicColor(96);
+            case 107 -> ansiBasicColor(97);
+            default -> null;
+        };
+    }
+
     private static int xterm256Color(int code) {
         code = Math.max(0, Math.min(255, code));
 
@@ -249,24 +311,31 @@ public class AnsiColorParser {
     }
 
     private static class AnsiStyle {
-        private Integer color;
+        private Integer foreground;
+        private Integer background;
         private boolean bold;
         private boolean italic;
         private boolean underline;
         private boolean strikethrough;
 
         private void reset() {
-            color = null;
+            foreground = null;
+            background = null;
             bold = false;
             italic = false;
             underline = false;
             strikethrough = false;
         }
 
+        private boolean isBackgroundOnly() {
+            return foreground == null && background != null;
+        }
+
         private Style toTextStyle() {
             Style style = Style.EMPTY;
-            if (color != null) {
-                style = style.withColor(color);
+            Integer visibleColor = foreground != null ? foreground : background;
+            if (visibleColor != null) {
+                style = style.withColor(visibleColor);
             }
             if (bold) {
                 style = style.withBold(true);
