@@ -7,6 +7,7 @@ import net.minecraft.util.Formatting;
 
 public class AnsiColorParser {
     private final AnsiStyle style = new AnsiStyle();
+    private int lineNumber;
 
     public static Text parse(String line) {
         return new AnsiColorParser().parseLine(line);
@@ -16,28 +17,35 @@ public class AnsiColorParser {
         MutableText result = Text.literal("");
         StringBuilder plain = new StringBuilder();
         int column = 0;
+        int currentLine = lineNumber++;
 
         for (int i = 0; i < line.length(); i++) {
             char c = line.charAt(i);
 
             int csiPrefixLength = csiPrefixLength(line, i);
             if (csiPrefixLength > 0) {
-                    int sequenceStart = i + csiPrefixLength;
-                    int sequenceEnd = sequenceStart;
-                    while (sequenceEnd < line.length() && !isCsiFinal(line.charAt(sequenceEnd))) {
-                        sequenceEnd++;
-                    }
+                int sequenceStart = i + csiPrefixLength;
+                int sequenceEnd = sequenceStart;
+                while (sequenceEnd < line.length() && !isCsiFinal(line.charAt(sequenceEnd))) {
+                    sequenceEnd++;
+                }
 
-                    if (sequenceEnd >= line.length()) {
-                        break;
-                    }
+                if (sequenceEnd >= line.length()) {
+                    break;
+                }
 
+                String params = line.substring(sequenceStart, sequenceEnd);
+                char command = line.charAt(sequenceEnd);
+                if ((command == 'C' || command == 'G') && !plain.toString().isBlank() && !style.hasVisibleColor()) {
+                    style.applyAutoForeground(fallbackLogoColor(currentLine));
                     appendPlain(result, plain, style);
-                    String params = line.substring(sequenceStart, sequenceEnd);
-                    char command = line.charAt(sequenceEnd);
-                    column = handleCsi(result, plain, style, column, params, command);
-                    i = sequenceEnd;
-                    continue;
+                    style.clearAutoForeground();
+                } else {
+                    appendPlain(result, plain, style);
+                }
+                column = handleCsi(result, plain, style, column, params, command);
+                i = sequenceEnd;
+                continue;
             }
 
             if (c == '\u001B') {
@@ -112,34 +120,34 @@ public class AnsiColorParser {
                 case 23 -> style.italic = false;
                 case 24 -> style.underline = false;
                 case 29 -> style.strikethrough = false;
-                case 30, 31, 32, 33, 34, 35, 36, 37, 90, 91, 92, 93, 94, 95, 96, 97 -> style.foreground = ansiBasicColor(code);
-                case 40, 41, 42, 43, 44, 45, 46, 47, 100, 101, 102, 103, 104, 105, 106, 107 -> style.background = ansiBackgroundColor(code);
+                case 30, 31, 32, 33, 34, 35, 36, 37, 90, 91, 92, 93, 94, 95, 96, 97 -> style.setForeground(ansiBasicColor(code));
+                case 40, 41, 42, 43, 44, 45, 46, 47, 100, 101, 102, 103, 104, 105, 106, 107 -> style.setBackground(ansiBackgroundColor(code));
                 case 38 -> {
                     if (i + 1 < codes.length && codes[i + 1] == 5 && i + 2 < codes.length) {
-                        style.foreground = xterm256Color(codes[i + 2]);
+                        style.setForeground(xterm256Color(codes[i + 2]));
                         i += 2;
                     } else if (i + 1 < codes.length && codes[i + 1] == 2 && i + 4 < codes.length) {
                         int r = clampColor(codes[i + 2]);
                         int g = clampColor(codes[i + 3]);
                         int b = clampColor(codes[i + 4]);
-                        style.foreground = (r << 16) | (g << 8) | b;
+                        style.setForeground((r << 16) | (g << 8) | b);
                         i += 4;
                     }
                 }
                 case 48 -> {
                     if (i + 1 < codes.length && codes[i + 1] == 5 && i + 2 < codes.length) {
-                        style.background = xterm256Color(codes[i + 2]);
+                        style.setBackground(xterm256Color(codes[i + 2]));
                         i += 2;
                     } else if (i + 1 < codes.length && codes[i + 1] == 2 && i + 4 < codes.length) {
                         int r = clampColor(codes[i + 2]);
                         int g = clampColor(codes[i + 3]);
                         int b = clampColor(codes[i + 4]);
-                        style.background = (r << 16) | (g << 8) | b;
+                        style.setBackground((r << 16) | (g << 8) | b);
                         i += 4;
                     }
                 }
-                case 39 -> style.foreground = null;
-                case 49 -> style.background = null;
+                case 39 -> style.setForeground(null);
+                case 49 -> style.setBackground(null);
                 default -> {
                 }
             }
@@ -310,9 +318,18 @@ public class AnsiColorParser {
         return Math.max(0, Math.min(255, value));
     }
 
+    private static int fallbackLogoColor(int line) {
+        int[] ubuntuLike = {
+                0xE95420, 0xE95420, 0xC34113, 0xF29879,
+                0xE95420, 0x77216F, 0xE95420, 0xF29879
+        };
+        return ubuntuLike[Math.floorMod(line, ubuntuLike.length)];
+    }
+
     private static class AnsiStyle {
         private Integer foreground;
         private Integer background;
+        private boolean autoForeground;
         private boolean bold;
         private boolean italic;
         private boolean underline;
@@ -321,6 +338,7 @@ public class AnsiColorParser {
         private void reset() {
             foreground = null;
             background = null;
+            autoForeground = false;
             bold = false;
             italic = false;
             underline = false;
@@ -329,6 +347,31 @@ public class AnsiColorParser {
 
         private boolean isBackgroundOnly() {
             return foreground == null && background != null;
+        }
+
+        private boolean hasVisibleColor() {
+            return foreground != null || background != null;
+        }
+
+        private void setForeground(Integer color) {
+            foreground = color;
+            autoForeground = false;
+        }
+
+        private void setBackground(Integer color) {
+            background = color;
+        }
+
+        private void applyAutoForeground(int color) {
+            foreground = color;
+            autoForeground = true;
+        }
+
+        private void clearAutoForeground() {
+            if (autoForeground) {
+                foreground = null;
+                autoForeground = false;
+            }
         }
 
         private Style toTextStyle() {
