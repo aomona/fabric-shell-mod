@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "shellmod",
+  "version": "${version}",
+  "name": "ShellMod",
+  "description": "Execute shell commands from Minecraft server chat (OP only)",
+  "authors": ["Your Name"],
+  "contact": {},
+  "license": "MIT",
+  "icon": "assets/shellmod/icon.png",
+  "environment": "server",
+  "entrypoints": {
+    "main": [
+      "com.example.shellmod.ShellMod"
+    ]
+  },
+  "depends": {
+    "fabricloader": ">=0.16.0",
+    "minecraft": ">=1.21.1",
+    "fabric-api": "*"
+  }
+}
